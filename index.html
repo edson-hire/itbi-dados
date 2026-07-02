@@ -175,7 +175,7 @@ async function obterWorker(ano){
   const worker = await createDbWorker(
     [{ from: "jsonconfig", configUrl }],
     "lib/sqlite.worker.js",
-    "lib/sql-wasm.wasm"
+    "sql-wasm.wasm"
   );
   workers[ano] = worker;
   // carrega nomes de colunas na primeira vez
