@@ -1,0 +1,8 @@
+{
+  "serverMode": "chunked",
+  "requestChunkSize": 1024,
+  "databaseLengthBytes": 51595264,
+  "serverChunkSize": 20000000,
+  "urlPrefix": "itbi_2026.db.",
+  "suffixLength": 3
+}
