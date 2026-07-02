@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buscador de Transações ITBI — São Paulo</title>
+<script src="lib/index.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
+<style>
+  :root{
+    --bg:#0f1b16; --panel:#16241d; --ink:#eaf1ec; --muted:#93a89b;
+    --accent:#3fae6a; --accent-soft:#1f3d2c; --border:#24382c; --warn:#d99a3f;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; font-family:'Segoe UI',Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink);}
+  header{padding:24px 28px 18px; border-bottom:1px solid var(--border);}
+  header h1{margin:0 0 4px; font-size:1.35rem; font-weight:700;}
+  header p{margin:0; color:var(--muted); font-size:.85rem;}
+  main{max-width:1200px; margin:0 auto; padding:20px 28px 60px;}
+
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px 20px; margin-bottom:18px;}
+  .card h2{font-size:.95rem; margin:0 0 4px;}
+  .card .sub{color:var(--muted); font-size:.8rem; margin-bottom:14px;}
+
+  .tabs{display:flex; gap:8px; margin-bottom:14px;}
+  .tab-btn{background:transparent; border:1px solid var(--border); color:var(--muted); padding:8px 16px; border-radius:8px; cursor:pointer; font-size:.85rem;}
+  .tab-btn.active{background:var(--accent-soft); color:var(--ink); border-color:var(--accent);}
+  .field-row{display:flex; gap:12px; flex-wrap:wrap;}
+  .field{flex:1; min-width:220px;}
+  .field label{display:block; font-size:.78rem; color:var(--muted); margin-bottom:6px;}
+  .field input, .field select{width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:#0c1712; color:var(--ink); font-size:.95rem;}
+  .field input:focus, .field select:focus{outline:2px solid var(--accent); border-color:var(--accent);}
+  .actions{margin-top:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;}
+  button.primary{background:var(--accent); color:#06170e; border:none; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer; font-size:.9rem;}
+  button.primary:hover{filter:brightness(1.08);}
+  button.primary:disabled{opacity:.5; cursor:wait;}
+  button.secondary{background:transparent; border:1px solid var(--border); color:var(--ink); padding:6px 12px; border-radius:8px; cursor:pointer; font-size:.8rem;}
+  .status{color:var(--muted); font-size:.85rem;}
+  .status.warn{color:var(--warn);}
+
+  .results-header{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;}
+  .results-header h2{font-size:1rem; margin:0;}
+  .results-header span{color:var(--muted); font-size:.85rem;}
+  table{width:100%; border-collapse:collapse; font-size:.83rem; white-space:nowrap;}
+  thead th{text-align:left; padding:10px 12px; background:var(--accent-soft); position:sticky; top:0; font-weight:600; border-bottom:1px solid var(--border);}
+  tbody td{padding:9px 12px; border-bottom:1px solid var(--border);}
+  tbody tr:hover{background:#132018;}
+  .table-wrap{max-height:480px; overflow:auto; border:1px solid var(--border); border-radius:12px;}
+  .pager{display:flex; gap:8px; align-items:center; margin-top:12px; justify-content:flex-end;}
+  .pager button{background:var(--panel); border:1px solid var(--border); color:var(--ink); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:.8rem;}
+  .pager button:disabled{opacity:.4; cursor:not-allowed;}
+  .empty{color:var(--muted); padding:36px; text-align:center; font-size:.88rem;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Buscador de Transações ITBI — Município de São Paulo</h1>
+  <p>Fonte: Guias de ITBI pagas, Secretaria Municipal da Fazenda (dados públicos). Consulta remota: só os dados da sua busca são baixados.</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Buscar transações</h2>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="endereco">Por endereço</button>
+      <button class="tab-btn" data-tab="sql">Por SQL (cadastro)</button>
+    </div>
+    <div id="tab-endereco">
+      <div class="field-row">
+        <div class="field" style="flex:2;">
+          <label for="input-endereco">Endereço — palavras do logradouro/bairro (ex: "paulista", "faria lima")</label>
+          <input id="input-endereco" type="text" placeholder="ex: avenida paulista">
+        </div>
+        <div class="field">
+          <label for="input-ano-e">Ano</label>
+          <select id="input-ano-e"><option value="">Todos</option></select>
+        </div>
+      </div>
+    </div>
+    <div id="tab-sql" style="display:none;">
+      <div class="field-row">
+        <div class="field">
+          <label for="input-sql">Número de cadastro (SQL) — começo ou número completo</label>
+          <input id="input-sql" type="text" placeholder="ex: 123.183.0010-1 ou 123183">
+        </div>
+        <div class="field">
+          <label for="input-ano-s">Ano</label>
+          <select id="input-ano-s"><option value="">Todos</option></select>
+        </div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="btn-buscar">Buscar</button>
+      <span class="status" id="status">Inicializando...</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Mapa de lotes</h2>
+    <div class="sub">Clique em um lote para buscar suas transações, ou clique em "Mapa" numa linha de resultado. Geometrias: GeoSampa/PMSP.</div>
+    <div id="map" style="height:420px; border-radius:10px; overflow:hidden; border:1px solid var(--border);"></div>
+    <div class="status" id="map-status" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="results-header">
+    <h2>Resultados</h2>
+    <span id="results-count"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead id="thead"></thead>
+      <tbody id="tbody"><tr><td class="empty">Faça uma busca para ver resultados.</td></tr></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <button id="btn-prev">◀ Anterior</button>
+    <span class="status" id="page-info"></span>
+    <button id="btn-next">Próxima ▶</button>
+  </div>
+</main>
+
+<script>
+const PAGE_SIZE = 50;
+const LIMITE_POR_ANO = 300; // máximo de resultados por ano por busca (mantém a consulta rápida)
+
+// colunas mostradas primeiro na tabela; as demais vêm em seguida na ordem original
+const COLUNAS_PRIORIDADE = [
+  "data_de_transacao", "endereco_completo", "n_do_cadastro_sql",
+  "natureza_de_transacao", "valor_de_transacao_declarado_pelo_contribuinte",
+  "cartorio_de_registro", "ano_planilha", "mes_aba"
+];
+const COLUNAS_OCULTAS = new Set(["endereco_normalizado", "sql_digits"]);
+
+let manifest = null;          // { anos: { "2026": "dados_2026/config.json", ... } }
+let workers = {};             // ano -> dbWorker (criado sob demanda)
+let nomesColunas = {};        // nome_sql -> nome_original (da tabela 'colunas')
+let currentRows = [];
+let currentPage = 0;
+
+function normalizar(str){
+  return (str || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+function setStatus(msg, warn){
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status' + (warn ? ' warn' : '');
+}
+
+// ---------------------------------------------------------------
+// INICIALIZAÇÃO: manifest + workers sob demanda
+// ---------------------------------------------------------------
+async function init(){
+  try{
+    const resp = await fetch('manifest.json', { cache: 'no-cache' });
+    manifest = await resp.json();
+    const anos = Object.keys(manifest.anos).sort().reverse();
+    for(const sel of [document.getElementById('input-ano-e'), document.getElementById('input-ano-s')]){
+      sel.innerHTML = '<option value="">Todos</option>' + anos.map(a => `<option value="${a}">${a}</option>`).join('');
+    }
+    setStatus(`Pronto. ${anos.length} ano(s) disponíveis: ${anos.join(', ')}.`);
+  }catch(err){
+    console.error(err);
+    setStatus('Erro ao carregar manifest.json — verifique se o arquivo existe no repositório.', true);
+  }
+}
+
+async function obterWorker(ano){
+  if(workers[ano]) return workers[ano];
+  // IMPORTANTE: o configUrl é resolvido DENTRO do worker (relativo a lib/),
+  // então precisamos convertê-lo para URL absoluta em relação à página.
+  const configUrl = new URL(manifest.anos[ano], location.href).toString();
+  const worker = await createDbWorker(
+    [{ from: "jsonconfig", configUrl }],
+    "lib/sqlite.worker.js",
+    "lib/sql-wasm.wasm"
+  );
+  workers[ano] = worker;
+  // carrega nomes de colunas na primeira vez
+  if(!Object.keys(nomesColunas).length){
+    try{
+      const cols = await worker.db.query("SELECT nome_sql, nome_original FROM colunas");
+      for(const c of cols) nomesColunas[c.nome_sql] = c.nome_original;
+    }catch(e){ console.warn('sem tabela colunas', e); }
+  }
+  return worker;
+}
+
+function anosParaBuscar(anoSelecionado){
+  const todos = Object.keys(manifest.anos).sort().reverse();
+  return anoSelecionado ? [anoSelecionado] : todos;
+}
+
+// monta consulta FTS segura: só letras/números viram tokens, último token com prefixo
+function montarConsultaFTS(texto){
+  const tokens = normalizar(texto).split(/[^a-z0-9]+/).filter(Boolean);
+  if(!tokens.length) return null;
+  return tokens.map(t => `"${t}"*`).join(' ');
+}
+
+// ---------------------------------------------------------------
+// BUSCA
+// ---------------------------------------------------------------
+async function buscar(){
+  if(!manifest){ setStatus('Ainda inicializando, aguarde...', true); return; }
+  const tab = document.querySelector('.tab-btn.active').dataset.tab;
+  const btn = document.getElementById('btn-buscar');
+  btn.disabled = true;
+
+  try{
+    let resultados = [];
+    if(tab === 'endereco'){
+      const termoFTS = montarConsultaFTS(document.getElementById('input-endereco').value);
+      const ano = document.getElementById('input-ano-e').value;
+      if(!termoFTS){ setStatus('Digite ao menos uma palavra do endereço.', true); return; }
+      const anos = anosParaBuscar(ano);
+      for(const a of anos){
+        setStatus(`Buscando em ${a}...`);
+        const worker = await obterWorker(a);
+        const rows = await worker.db.query(
+          `SELECT t.* FROM transacoes t JOIN fts_endereco f ON t.rowid = f.rowid
+           WHERE fts_endereco MATCH ? LIMIT ${LIMITE_POR_ANO}`, [termoFTS]);
+        resultados = resultados.concat(rows);
+      }
+    } else {
+      const digitos = (document.getElementById('input-sql').value || '').replace(/\D/g, '');
+      const ano = document.getElementById('input-ano-s').value;
+      if(!digitos){ setStatus('Digite ao menos os primeiros dígitos do SQL.', true); return; }
+      const anos = anosParaBuscar(ano);
+      for(const a of anos){
+        setStatus(`Buscando em ${a}...`);
+        const worker = await obterWorker(a);
+        const rows = await worker.db.query(
+          `SELECT * FROM transacoes WHERE sql_digits >= ? AND sql_digits < ? LIMIT ${LIMITE_POR_ANO}`,
+          [digitos, digitos + '\uffff']);
+        resultados = resultados.concat(rows);
+      }
+    }
+    currentRows = resultados;
+    currentPage = 0;
+    renderPage();
+    const obs = resultados.length >= LIMITE_POR_ANO ? ` (limitado a ${LIMITE_POR_ANO} por ano — refine a busca para ver menos resultados mais específicos)` : '';
+    setStatus(`${resultados.length.toLocaleString('pt-BR')} resultado(s)${obs}.`);
+  }catch(err){
+    console.error(err);
+    setStatus('Erro na busca: ' + err.message, true);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+function renderPage(){
+  const thead = document.getElementById('thead');
+  const tbody = document.getElementById('tbody');
+  const resultsCount = document.getElementById('results-count');
+  const pageInfo = document.getElementById('page-info');
+
+  if(!currentRows.length){
+    thead.innerHTML = '';
+    tbody.innerHTML = '<tr><td class="empty">Nenhum resultado encontrado.</td></tr>';
+    resultsCount.textContent = ''; pageInfo.textContent = '';
+    return;
+  }
+
+  const todasColunas = Object.keys(currentRows[0]).filter(c => !COLUNAS_OCULTAS.has(c));
+  const prioridade = COLUNAS_PRIORIDADE.filter(c => todasColunas.includes(c));
+  const restantes = todasColunas.filter(c => !prioridade.includes(c));
+  const colunas = prioridade.concat(restantes);
+
+  thead.innerHTML = '<tr><th>Mapa</th>' + colunas.map(c => `<th>${nomesColunas[c] || c}</th>`).join('') + '</tr>';
+
+  const start = currentPage * PAGE_SIZE;
+  const pageRows = currentRows.slice(start, start + PAGE_SIZE);
+  tbody.innerHTML = pageRows.map((row, i) => {
+    const idxGlobal = start + i;
+    return `<tr><td><button class="secondary" onclick="verNoMapa(${idxGlobal})">Mapa</button></td>` +
+      colunas.map(c => `<td>${row[c] ?? ''}</td>`).join('') + '</tr>';
+  }).join('');
+
+  const totalPages = Math.ceil(currentRows.length / PAGE_SIZE);
+  resultsCount.textContent = `${currentRows.length.toLocaleString('pt-BR')} linha(s)`;
+  pageInfo.textContent = `Página ${currentPage + 1} de ${totalPages}`;
+  document.getElementById('btn-prev').disabled = currentPage === 0;
+  document.getElementById('btn-next').disabled = currentPage >= totalPages - 1;
+}
+
+// tabs
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    document.getElementById('tab-endereco').style.display = tab === 'endereco' ? '' : 'none';
+    document.getElementById('tab-sql').style.display = tab === 'sql' ? '' : 'none';
+  });
+});
+
+document.getElementById('btn-buscar').addEventListener('click', buscar);
+document.getElementById('input-endereco').addEventListener('keydown', e => { if(e.key === 'Enter') buscar(); });
+document.getElementById('input-sql').addEventListener('keydown', e => { if(e.key === 'Enter') buscar(); });
+document.getElementById('btn-prev').addEventListener('click', () => { if(currentPage > 0){ currentPage--; renderPage(); } });
+document.getElementById('btn-next').addEventListener('click', () => {
+  const totalPages = Math.ceil(currentRows.length / PAGE_SIZE);
+  if(currentPage < totalPages - 1){ currentPage++; renderPage(); }
+});
+
+// ---------------------------------------------------------------
+// MAPA DE LOTES (GeoSampa WFS)
+// ---------------------------------------------------------------
+const WFS_URL = "https://wfs.geosampa.prefeitura.sp.gov.br/geoserver/geoportal/ows";
+const WFS_LAYER = "geoportal:lote_cidadao";
+proj4.defs("EPSG:31983", "+proj=utm +zone=23 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+
+const mapStatus = document.getElementById('map-status');
+const map = L.map('map').setView([-23.5505, -46.6333], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
+}).addTo(map);
+let camadaLoteAtual = null;
+
+function utmParaLatLng(coordsUtm){
+  return coordsUtm.map(([x, y]) => {
+    const [lng, lat] = proj4('EPSG:31983', 'EPSG:4326', [x, y]);
+    return [lat, lng];
+  });
+}
+function decomporSQL(sqlBruto){
+  const digitos = (sqlBruto || "").toString().replace(/\D/g, "");
+  if(digitos.length < 10) return null;
+  const padded = digitos.padStart(11, "0");
+  return { setor: padded.slice(0,3), quadra: padded.slice(3,6), lote: padded.slice(6,10), digito: padded.slice(10,11) };
+}
+function montarSQL(props){ return `${props.cd_setor_fiscal}${props.cd_quadra_fiscal}${props.cd_lote}${props.cd_digito_sql}`; }
+
+function desenharLote(feature){
+  if(camadaLoteAtual) map.removeLayer(camadaLoteAtual);
+  const anel = feature.geometry.coordinates[0];
+  const latlngs = utmParaLatLng(anel);
+  camadaLoteAtual = L.polygon(latlngs, { color: '#3fae6a', weight: 2, fillOpacity: 0.35 }).addTo(map);
+  map.fitBounds(camadaLoteAtual.getBounds(), { maxZoom: 18 });
+  const p = feature.properties;
+  camadaLoteAtual.bindPopup(`<b>SQL:</b> ${montarSQL(p)}<br><b>Endereço:</b> ${p.nm_logradouro_completo || ''} ${p.cd_numero_porta || ''}<br><b>Situação:</b> ${p.tx_situ_lote || ''}`).openPopup();
+}
+
+async function buscarLotePorSQL(sqlBruto){
+  const partes = decomporSQL(sqlBruto);
+  if(!partes){ mapStatus.textContent = 'SQL inválido para localizar no mapa.'; return; }
+  mapStatus.textContent = 'Consultando GeoSampa...';
+  const filtro = `cd_setor_fiscal='${partes.setor}' AND cd_quadra_fiscal='${partes.quadra}' AND cd_lote='${partes.lote}'`;
+  const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`;
+  try{
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('resposta ' + resp.status);
+    const geojson = await resp.json();
+    if(!geojson.features || !geojson.features.length){ mapStatus.textContent = 'Lote não encontrado no GeoSampa para esse SQL.'; return; }
+    desenharLote(geojson.features[0]);
+    mapStatus.textContent = '';
+  }catch(err){
+    console.error(err);
+    mapStatus.textContent = 'Erro ao consultar o GeoSampa (' + err.message + ').';
+  }
+}
+
+async function buscarLotePorClique(latlng){
+  mapStatus.textContent = 'Identificando lote clicado...';
+  const [x, y] = proj4('EPSG:4326', 'EPSG:31983', [latlng.lng, latlng.lat]);
+  const filtro = `INTERSECTS(ge_poligono, POINT(${x} ${y}))`;
+  const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`;
+  try{
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('resposta ' + resp.status);
+    const geojson = await resp.json();
+    if(!geojson.features || !geojson.features.length){ mapStatus.textContent = 'Nenhum lote encontrado nesse ponto.'; return; }
+    const feature = geojson.features[0];
+    desenharLote(feature);
+    const sql = montarSQL(feature.properties);
+    document.querySelector('.tab-btn[data-tab="sql"]').click();
+    document.getElementById('input-sql').value = sql;
+    await buscar();
+    mapStatus.textContent = `Lote SQL ${sql} localizado.`;
+  }catch(err){
+    console.error(err);
+    mapStatus.textContent = 'Erro ao consultar o GeoSampa (' + err.message + ').';
+  }
+}
+map.on('click', e => buscarLotePorClique(e.latlng));
+
+function verNoMapa(idxGlobal){
+  const row = currentRows[idxGlobal];
+  if(!row) return;
+  const sqlValor = row.n_do_cadastro_sql || row.sql_digits;
+  if(!sqlValor) return;
+  document.getElementById('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  buscarLotePorSQL(sqlValor);
+}
+window.verNoMapa = verNoMapa;
+
+init();
+</script>
+</body>
+</html>
