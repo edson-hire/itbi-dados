@@ -57,7 +57,7 @@
 <body>
 
 <header>
-  <h1>Buscador de Transações ITBI — Município de São Paulo</h1>
+  <h1>Buscador de Transações ITBI — Município de São Paulo <span style="font-size:.7rem; color:var(--muted); font-weight:400;">v5</span></h1>
   <p>Fonte: Guias de ITBI pagas, Secretaria Municipal da Fazenda (dados públicos). Consulta remota: só os dados da sua busca são baixados.</p>
 </header>
 
@@ -169,13 +169,15 @@ async function init(){
 
 async function obterWorker(ano){
   if(workers[ano]) return workers[ano];
-  // IMPORTANTE: o configUrl é resolvido DENTRO do worker (relativo a lib/),
-  // então precisamos convertê-lo para URL absoluta em relação à página.
+  // URLs absolutas: elimina qualquer ambiguidade de resolução relativa
+  // (o wasm é buscado de dentro do worker, que roda em lib/)
   const configUrl = new URL(manifest.anos[ano], location.href).toString();
+  const workerUrl = new URL("lib/sqlite.worker.js", location.href).toString();
+  const wasmUrl = new URL("lib/sql-wasm.wasm", location.href).toString();
   const worker = await createDbWorker(
     [{ from: "jsonconfig", configUrl }],
-    "lib/sqlite.worker.js",
-    "sql-wasm.wasm"
+    workerUrl,
+    wasmUrl
   );
   workers[ano] = worker;
   // carrega nomes de colunas na primeira vez
