@@ -57,7 +57,7 @@
 <body>
 
 <header>
-  <h1>Buscador de Transações ITBI — Município de São Paulo <span style="font-size:.7rem; color:var(--muted); font-weight:400;">v5</span></h1>
+  <h1>Buscador de Transações ITBI — Município de São Paulo <span style="font-size:.7rem; color:var(--muted); font-weight:400;">v6</span></h1>
   <p>Fonte: Guias de ITBI pagas, Secretaria Municipal da Fazenda (dados públicos). Consulta remota: só os dados da sua busca são baixados.</p>
 </header>
 
@@ -100,7 +100,7 @@
 
   <div class="card">
     <h2>Mapa de lotes</h2>
-    <div class="sub">Clique em um lote para buscar suas transações, ou clique em "Mapa" numa linha de resultado. Geometrias: GeoSampa/PMSP.</div>
+    <div class="sub">Aproxime o zoom até os lotes aparecerem desenhados, e clique em um lote para buscar suas transações. Também dá para clicar em "Mapa" numa linha de resultado. Geometrias: GeoSampa/PMSP.</div>
     <div id="map" style="height:420px; border-radius:10px; overflow:hidden; border:1px solid var(--border);"></div>
     <div class="status" id="map-status" style="margin-top:8px;"></div>
   </div>
@@ -387,7 +387,73 @@ async function buscarLotePorClique(latlng){
     mapStatus.textContent = 'Erro ao consultar o GeoSampa (' + err.message + ').';
   }
 }
-map.on('click', e => buscarLotePorClique(e.latlng));
+map.on('click', e => {
+  if(cliqueEmLote){ cliqueEmLote = false; return; } // clique já tratado pelo polígono
+  buscarLotePorClique(e.latlng);
+});
+
+// ---------------------------------------------------------------
+// CAMADA DE LOTES VISÍVEIS E CLICÁVEIS (carregada por área, zoom >= 17)
+// ---------------------------------------------------------------
+const ZOOM_MINIMO_LOTES = 17;
+const MAX_LOTES_POR_AREA = 600;
+const camadaLotes = L.layerGroup().addTo(map);
+let cliqueEmLote = false;
+let carregandoLotes = false;
+
+async function carregarLotesVisiveis(){
+  if(map.getZoom() < ZOOM_MINIMO_LOTES){
+    camadaLotes.clearLayers();
+    mapStatus.textContent = 'Aproxime o zoom para ver os lotes clicáveis.';
+    return;
+  }
+  if(carregandoLotes) return;
+  carregandoLotes = true;
+  mapStatus.textContent = 'Carregando lotes da área...';
+  try{
+    const b = map.getBounds();
+    const [x1, y1] = proj4('EPSG:4326', 'EPSG:31983', [b.getWest(), b.getSouth()]);
+    const [x2, y2] = proj4('EPSG:4326', 'EPSG:31983', [b.getEast(), b.getNorth()]);
+    const filtro = `BBOX(ge_poligono, ${x1}, ${y1}, ${x2}, ${y2})`;
+    const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&maxFeatures=${MAX_LOTES_POR_AREA}&cql_filter=${encodeURIComponent(filtro)}`;
+    const resp = await fetch(url);
+    if(!resp.ok) throw new Error('resposta ' + resp.status);
+    const geojson = await resp.json();
+
+    camadaLotes.clearLayers();
+    for(const feature of (geojson.features || [])){
+      const aneis = feature.geometry.type === 'Polygon'
+        ? [feature.geometry.coordinates]
+        : feature.geometry.coordinates; // MultiPolygon
+      for(const poligono of aneis){
+        const latlngs = utmParaLatLng(poligono[0]);
+        const p = feature.properties;
+        const lote = L.polygon(latlngs, { color: '#3fae6a', weight: 1, fillOpacity: 0.06 });
+        lote.on('mouseover', () => lote.setStyle({ weight: 2, fillOpacity: 0.25 }));
+        lote.on('mouseout', () => lote.setStyle({ weight: 1, fillOpacity: 0.06 }));
+        lote.on('click', async () => {
+          cliqueEmLote = true;
+          const sql = montarSQL(p);
+          lote.bindPopup(`<b>SQL:</b> ${sql}<br><b>Endereço:</b> ${p.nm_logradouro_completo || ''} ${p.cd_numero_porta || ''}<br><b>Situação:</b> ${p.tx_situ_lote || ''}`).openPopup();
+          document.querySelector('.tab-btn[data-tab="sql"]').click();
+          document.getElementById('input-sql').value = sql;
+          await buscar();
+          mapStatus.textContent = `Lote SQL ${sql} selecionado.`;
+        });
+        camadaLotes.addLayer(lote);
+      }
+    }
+    const obs = (geojson.features || []).length >= MAX_LOTES_POR_AREA ? ' (área grande — aproxime mais para ver todos)' : '';
+    mapStatus.textContent = `${(geojson.features || []).length} lote(s) na área${obs}. Clique em um lote para buscar suas transações.`;
+  }catch(err){
+    console.error(err);
+    mapStatus.textContent = 'Erro ao carregar lotes (' + err.message + ').';
+  }finally{
+    carregandoLotes = false;
+  }
+}
+map.on('moveend', carregarLotesVisiveis);
+carregarLotesVisiveis();
 
 function verNoMapa(idxGlobal){
   const row = currentRows[idxGlobal];
