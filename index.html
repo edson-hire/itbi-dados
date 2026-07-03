@@ -57,7 +57,7 @@
 <body>
 
 <header>
-  <h1>Buscador de Transações ITBI — Município de São Paulo <span style="font-size:.7rem; color:var(--muted); font-weight:400;">v6</span></h1>
+  <h1>Buscador de Transações ITBI — Município de São Paulo <span style="font-size:.7rem; color:var(--muted); font-weight:400;">v8</span></h1>
   <p>Fonte: Guias de ITBI pagas, Secretaria Municipal da Fazenda (dados públicos). Consulta remota: só os dados da sua busca são baixados.</p>
 </header>
 
@@ -101,6 +101,15 @@
   <div class="card">
     <h2>Mapa de lotes</h2>
     <div class="sub">Aproxime o zoom até os lotes aparecerem desenhados, e clique em um lote para buscar suas transações. Também dá para clicar em "Mapa" numa linha de resultado. Geometrias: GeoSampa/PMSP.</div>
+    <div class="field-row" style="margin-bottom:12px;">
+      <div class="field" style="flex:3;">
+        <label for="input-proxy">Proxy do mapa (URL do seu Cloudflare Worker) — configure uma vez</label>
+        <input id="input-proxy" type="text" placeholder="https://seu-worker.workers.dev/?url=">
+      </div>
+      <div class="field" style="flex:0 0 auto; display:flex; align-items:flex-end;">
+        <button class="secondary" id="btn-salvar-proxy" style="padding:10px 16px;">Salvar proxy</button>
+      </div>
+    </div>
     <div id="map" style="height:420px; border-radius:10px; overflow:hidden; border:1px solid var(--border);"></div>
     <div class="status" id="map-status" style="margin-top:8px;"></div>
   </div>
@@ -311,7 +320,16 @@ document.getElementById('btn-next').addEventListener('click', () => {
 // ---------------------------------------------------------------
 // MAPA DE LOTES (GeoSampa WFS)
 // ---------------------------------------------------------------
-const WFS_URL = "https://wfs.geosampa.prefeitura.sp.gov.br/geoserver/geoportal/ows";
+// O GeoSampa não envia cabeçalhos CORS, então o navegador bloqueia o acesso direto.
+// A solução definitiva é um proxy próprio no Cloudflare Workers (grátis).
+// A URL do seu Worker é configurada na interface (campo "Proxy do mapa") e
+// fica salva para todo o time. Formato: https://SEU-WORKER.workers.dev/?url=
+let CORS_PROXY = "";
+const WFS_BASE = "https://wfs.geosampa.prefeitura.sp.gov.br/geoserver/geoportal/ows";
+function wfsUrl(params){
+  const alvo = WFS_BASE + "?" + params;
+  return CORS_PROXY ? CORS_PROXY + encodeURIComponent(alvo) : alvo;
+}
 const WFS_LAYER = "geoportal:lote_cidadao";
 proj4.defs("EPSG:31983", "+proj=utm +zone=23 +south +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
 
@@ -351,7 +369,7 @@ async function buscarLotePorSQL(sqlBruto){
   if(!partes){ mapStatus.textContent = 'SQL inválido para localizar no mapa.'; return; }
   mapStatus.textContent = 'Consultando GeoSampa...';
   const filtro = `cd_setor_fiscal='${partes.setor}' AND cd_quadra_fiscal='${partes.quadra}' AND cd_lote='${partes.lote}'`;
-  const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`;
+  const url = wfsUrl(`service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`);
   try{
     const resp = await fetch(url);
     if(!resp.ok) throw new Error('resposta ' + resp.status);
@@ -369,7 +387,7 @@ async function buscarLotePorClique(latlng){
   mapStatus.textContent = 'Identificando lote clicado...';
   const [x, y] = proj4('EPSG:4326', 'EPSG:31983', [latlng.lng, latlng.lat]);
   const filtro = `INTERSECTS(ge_poligono, POINT(${x} ${y}))`;
-  const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`;
+  const url = wfsUrl(`service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&cql_filter=${encodeURIComponent(filtro)}`);
   try{
     const resp = await fetch(url);
     if(!resp.ok) throw new Error('resposta ' + resp.status);
@@ -415,7 +433,7 @@ async function carregarLotesVisiveis(){
     const [x1, y1] = proj4('EPSG:4326', 'EPSG:31983', [b.getWest(), b.getSouth()]);
     const [x2, y2] = proj4('EPSG:4326', 'EPSG:31983', [b.getEast(), b.getNorth()]);
     const filtro = `BBOX(ge_poligono, ${x1}, ${y1}, ${x2}, ${y2})`;
-    const url = `${WFS_URL}?service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&maxFeatures=${MAX_LOTES_POR_AREA}&cql_filter=${encodeURIComponent(filtro)}`;
+    const url = wfsUrl(`service=WFS&version=1.0.0&request=GetFeature&typeName=${WFS_LAYER}&outputFormat=application/json&maxFeatures=${MAX_LOTES_POR_AREA}&cql_filter=${encodeURIComponent(filtro)}`);
     const resp = await fetch(url);
     if(!resp.ok) throw new Error('resposta ' + resp.status);
     const geojson = await resp.json();
@@ -453,6 +471,26 @@ async function carregarLotesVisiveis(){
   }
 }
 map.on('moveend', carregarLotesVisiveis);
+
+// carrega/salva a URL do proxy do mapa (compartilhada com o time)
+(async function initProxy(){
+  try{
+    const r = await window.storage.get('itbi-proxy-url', true);
+    if(r && r.value){
+      CORS_PROXY = r.value;
+      document.getElementById('input-proxy').value = r.value;
+    }
+  }catch(e){ /* ainda não configurado */ }
+})();
+
+document.getElementById('btn-salvar-proxy').addEventListener('click', async () => {
+  const v = document.getElementById('input-proxy').value.trim();
+  CORS_PROXY = v;
+  try{ await window.storage.set('itbi-proxy-url', v, true); }catch(e){ console.warn('não salvou proxy', e); }
+  mapStatus.textContent = v ? 'Proxy salvo. Aproxime o zoom para carregar os lotes.' : 'Proxy removido.';
+  carregarLotesVisiveis();
+});
+
 carregarLotesVisiveis();
 
 function verNoMapa(idxGlobal){
